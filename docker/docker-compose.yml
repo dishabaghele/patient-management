@@ -29,33 +29,45 @@ services:
     container_name: patient-kafka
     restart: unless-stopped
     ports:
-      - "9093:9092"
-      - "9094:9094"
+      - "9095:9092"  # External access (using 9095 to avoid conflicts)
+      - "9096:9093"  # Controller port
     environment:
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://patient-kafka:9092,EXTERNAL://localhost:9094
-      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@patient-kafka:9093
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      # KRaft mode configuration
       - KAFKA_CFG_NODE_ID=0
       - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@patient-kafka:9093
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+
+      # Listeners configuration
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://patient-kafka:9092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+
+      # Topic configuration
       - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_CFG_NUM_PARTITIONS=3
+      - KAFKA_CFG_DEFAULT_REPLICATION_FACTOR=1
+
+      # Log configuration
       - KAFKA_CFG_LOG_RETENTION_HOURS=168
       - KAFKA_CFG_LOG_SEGMENT_BYTES=1073741824
       - KAFKA_CFG_LOG_RETENTION_CHECK_INTERVAL_MS=300000
-      - KAFKA_CFG_NUM_PARTITIONS=3
-      - KAFKA_CFG_DEFAULT_REPLICATION_FACTOR=1
+
+      # Additional settings for stability
+      - KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR=1
     volumes:
       - ./volumes/kafka-data:/bitnami/kafka
     networks:
       - patient_management_network
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 5
-      start_period: 60s
+      start_period: 90s
 
   # Kafka UI for management
   kafka-ui:
@@ -101,8 +113,17 @@ services:
       - LOGGING_LEVEL_ORG_HIBERNATE_SQL=DEBUG
       - LOGGING_LEVEL_ORG_HIBERNATE_TYPE_DESCRIPTOR_SQL_BASICBINDER=TRACE
       - LOGGING_LEVEL_ROOT=INFO
+      # Kafka configuration for patient service
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=patient-kafka:9092
+      - SPRING_KAFKA_PRODUCER_KEY_SERIALIZER=org.apache.kafka.common.serialization.StringSerializer       # ✅ Keep as String
+      - SPRING_KAFKA_PRODUCER_VALUE_SERIALIZER=org.apache.kafka.common.serialization.ByteArraySerializer  # ✅ Change to ByteArray
+      - SPRING_KAFKA_CONSUMER_KEY_DESERIALIZER=org.apache.kafka.common.serialization.StringDeserializer    # ✅ Keep as String
+      - SPRING_KAFKA_CONSUMER_VALUE_DESERIALIZER=org.apache.kafka.common.serialization.ByteArrayDeserializer # ✅ Change to ByteArray
+      - SPRING_KAFKA_CONSUMER_GROUP_ID=patient-service-group
     depends_on:
       patient-service-db:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     networks:
       - patient_management_network
@@ -127,6 +148,16 @@ services:
       - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
       - SERVER_PORT=4001
       - LOGGING_LEVEL_COM_BILLINGSERVICE=${LOG_LEVEL:-DEBUG}
+      # Kafka configuration for billing service
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=patient-kafka:9092
+      - SPRING_KAFKA_PRODUCER_KEY_SERIALIZER=org.apache.kafka.common.serialization.StringSerializer       # ✅ Keep as String
+      - SPRING_KAFKA_PRODUCER_VALUE_SERIALIZER=org.apache.kafka.common.serialization.ByteArraySerializer  # ✅ Change to ByteArray
+      - SPRING_KAFKA_CONSUMER_KEY_DESERIALIZER=org.apache.kafka.common.serialization.StringDeserializer    # ✅ Keep as String
+      - SPRING_KAFKA_CONSUMER_VALUE_DESERIALIZER=org.apache.kafka.common.serialization.ByteArrayDeserializer # ✅ Change to ByteArray
+      - SPRING_KAFKA_CONSUMER_GROUP_ID=billing-service-group
+    depends_on:
+      kafka:
+        condition: service_healthy
     networks:
       - patient_management_network
     healthcheck:
@@ -135,6 +166,38 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+  analytics-service:
+    build:
+      context: ../analytics-service
+      dockerfile: Dockerfile
+    container_name: analytics-service
+    restart: unless-stopped
+    ports:
+      - "4002:4002"  # HTTP port if any
+    environment:
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
+      - SERVER_PORT=4002
+      - LOGGING_LEVEL_COM_ANALYTICSSERVICE=${LOG_LEVEL:-DEBUG}
+      # Kafka configuration for patient service
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=patient-kafka:9092
+      - SPRING_KAFKA_PRODUCER_KEY_SERIALIZER=org.apache.kafka.common.serialization.StringSerializer       # ✅ Keep as String
+      - SPRING_KAFKA_PRODUCER_VALUE_SERIALIZER=org.apache.kafka.common.serialization.ByteArraySerializer  # ✅ Change to ByteArray
+      - SPRING_KAFKA_CONSUMER_KEY_DESERIALIZER=org.apache.kafka.common.serialization.StringDeserializer    # ✅ Keep as String
+      - SPRING_KAFKA_CONSUMER_VALUE_DESERIALIZER=org.apache.kafka.common.serialization.ByteArrayDeserializer # ✅ Change to ByteArray
+      - SPRING_KAFKA_CONSUMER_GROUP_ID=analytics-service-group
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - patient_management_network
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:4002/actuator/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
 
 networks:
   patient_management_network:
