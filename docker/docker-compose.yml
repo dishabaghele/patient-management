@@ -5,7 +5,9 @@ services:
     container_name: patient-service-db
     restart: unless-stopped
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "5000:5432"
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-admin_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
@@ -17,7 +19,33 @@ services:
     networks:
       - patient_management_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin_user} -d ${POSTGRES_DB:-db}"]
+      test: ["CMD-SHELL", "pg_isready -U admin_user -d db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # PostgreSQL Database for Auth Service
+  auth-service-db:
+    image: postgres:17-alpine
+    container_name: auth-service-db
+    restart: unless-stopped
+    ports:
+      - "5001:5432"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-admin_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-db}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    volumes:
+      - ./volumes/auth-service-db:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - patient_management_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin_user -d db"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -92,11 +120,12 @@ services:
       dockerfile: Dockerfile
     container_name: patient-service
     restart: unless-stopped
-    ports:
-      - "${PATIENT_SERVICE_PORT:-4000}:4000"
+    # No external ports exposed - only accessible internally
+    expose:
+      - "4000"
     environment:
       - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
-      - SPRING_DATASOURCE_URL=jdbc:postgresql://patient-service-db:5432/${POSTGRES_DB:-db}
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://patient-service-db:5432/db
       - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER:-admin_user}
       - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-password}
       - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
@@ -108,7 +137,6 @@ services:
       - BILLING_SERVICE_GRPC_PORT=9001
       - SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL=true
       - SPRING_JPA_DEFER_DATASOURCE_INITIALIZATION=${SPRING_JPA_DEFER_DATASOURCE_INITIALIZATION:-true}
-      - SERVER_PORT=4000
       - LOGGING_LEVEL_COM_PATIENTMANAGEMENT=${LOG_LEVEL:-DEBUG}
       - LOGGING_LEVEL_ORG_HIBERNATE_SQL=DEBUG
       - LOGGING_LEVEL_ORG_HIBERNATE_TYPE_DESCRIPTOR_SQL_BASICBINDER=TRACE
@@ -132,7 +160,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s
+      start_period: 30s
 
   # Billing Service (gRPC)
   billing-service:
@@ -167,6 +195,7 @@ services:
       retries: 3
       start_period: 60s
 
+  # Analytics Service
   analytics-service:
     build:
       context: ../analytics-service
@@ -179,7 +208,7 @@ services:
       - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
       - SERVER_PORT=4002
       - LOGGING_LEVEL_COM_ANALYTICSSERVICE=${LOG_LEVEL:-DEBUG}
-      # Kafka configuration for patient service
+      # Kafka configuration for analytics service
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=patient-kafka:9092
       - SPRING_KAFKA_PRODUCER_KEY_SERIALIZER=org.apache.kafka.common.serialization.StringSerializer       # ✅ Keep as String
       - SPRING_KAFKA_PRODUCER_VALUE_SERIALIZER=org.apache.kafka.common.serialization.ByteArraySerializer  # ✅ Change to ByteArray
@@ -198,6 +227,66 @@ services:
       retries: 3
       start_period: 60s
 
+  # Auth Service
+  auth-service:
+    build:
+      context: ../auth-service
+      dockerfile: Dockerfile
+    container_name: auth-service
+    restart: unless-stopped
+    # No external ports exposed - only accessible internally
+    ports:
+      - "4005:4005"  # HTTP port if any
+    environment:
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
+      - SERVER_PORT=4005
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://auth-service-db:5432/db
+      - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER:-admin_user}
+      - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=${DDL_AUTO:-update}
+      - SPRING_JPA_SHOW_SQL=${SHOW_SQL:-true}
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.PostgreSQLDialect
+      - SPRING_SQL_INIT_MODE=${SPRING_SQL_INIT_MODE:-always}
+    depends_on:
+      patient-service-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - patient_management_network
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:4005/actuator/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # API Gateway - The only service with external HTTP access
+  api-gateway:
+      build:
+        context: ../api-gateway
+        dockerfile: Dockerfile
+      container_name: api-gateway
+      restart: unless-stopped
+      ports:
+        - "4004:4004"  # External access point for all services
+      environment:
+        - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
+        - SERVER_PORT=4004
+        - LOGGING_LEVEL_ROOT=INFO
+        - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_GATEWAY=${LOG_LEVEL:-DEBUG}
+      depends_on:
+        patient-service:
+          condition: service_healthy
+      networks:
+        - patient_management_network
+      healthcheck:
+        test: [ "CMD-SHELL", "curl -f http://localhost:4004/actuator/health || exit 1" ]
+        interval: 30s
+        timeout: 10s
+        retries: 3
+        start_period: 60s
 
 networks:
   patient_management_network:
