@@ -280,6 +280,7 @@ services:
         - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
         - SERVER_PORT=4004
         - LOGGING_LEVEL_ROOT=INFO
+        - AUTH_SERVICE_URL=http://auth-service:4005
         - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_GATEWAY=DEBUG  # ✅ Enable debug logs
         - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB_REACTIVE=DEBUG   # ✅ Add reactive debug
       depends_on:
