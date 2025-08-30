@@ -235,8 +235,10 @@ services:
     container_name: auth-service
     restart: unless-stopped
     # No external ports exposed - only accessible internally
-    ports:
-      - "4005:4005"  # HTTP port if any
+#    ports:
+#      - "4005:4005"  # HTTP port if any
+    expose:
+      - "4005"
     environment:
       - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
       - SERVER_PORT=4005
@@ -248,10 +250,13 @@ services:
       - SPRING_JPA_SHOW_SQL=${SHOW_SQL:-true}
       - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.PostgreSQLDialect
       - SPRING_SQL_INIT_MODE=${SPRING_SQL_INIT_MODE:-always}
+      - SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL=true
+      - SPRING_JPA_DEFER_DATASOURCE_INITIALIZATION=${SPRING_JPA_DEFER_DATASOURCE_INITIALIZATION:-true}
+      - JWT_SECRET=bXlTZWN1cmVKV1RTZWNyZXRLZXlGb3JBdXRoU2VydmljZUF0TGVhc3QyNTZCaXRzTG9uZw==
+      - LOGGING_LEVEL_COM_AUTHSERVICE=${LOG_LEVEL:-DEBUG}
+      - LOGGING_LEVEL_ROOT=INFO
     depends_on:
-      patient-service-db:
-        condition: service_healthy
-      kafka:
+      auth-service-db:
         condition: service_healthy
     networks:
       - patient_management_network
@@ -275,9 +280,13 @@ services:
         - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-docker}
         - SERVER_PORT=4004
         - LOGGING_LEVEL_ROOT=INFO
-        - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_GATEWAY=${LOG_LEVEL:-DEBUG}
+        - AUTH_SERVICE_URL=http://auth-service:4005
+        - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_CLOUD_GATEWAY=DEBUG  # ✅ Enable debug logs
+        - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB_REACTIVE=DEBUG   # ✅ Add reactive debug
       depends_on:
         patient-service:
+          condition: service_healthy
+        auth-service: # ✅ Add auth-service dependency
           condition: service_healthy
       networks:
         - patient_management_network
